@@ -9,7 +9,22 @@
 // common case, and anything unrecognized safely falls back to "document" —
 // WhatsApp's generic file container that accepts any file type.
 
+import path from "node:path";
+
 export type MediaKind = "image" | "video" | "document";
+
+/**
+ * True when a path is safe to pass to Baileys as a local file — an absolute
+ * filesystem path with no URI scheme. Baileys treats `{ url }` media
+ * payloads as either a local path or an http(s) URL; without this guard, a
+ * caller could smuggle in a remote URL and make the server fetch
+ * attacker-controlled content (SSRF-shaped) instead of sending a local
+ * file, defeating the "local file paths only" design intent.
+ */
+export function isLocalFilePath(filePath: string): boolean {
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(filePath)) return false;
+  return path.isAbsolute(filePath);
+}
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
 const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".3gp", ".avi", ".mkv"]);

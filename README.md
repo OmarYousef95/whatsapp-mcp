@@ -10,7 +10,7 @@ Built on [Baileys](https://github.com/WhiskeySockets/Baileys), which speaks What
 
 | Tool | What it does |
 |---|---|
-| `send_message` | Send a text to a contact name, a phone number, or `me` (your self-chat) |
+| `send_message` | Send a text message, a local file (image/video/document, optionally with a caption), or both to a contact name, a phone number, or `me` (your self-chat) |
 | `search_contacts` | Find contacts by name fragment, returns names + numbers |
 | `get_connection_status` | Connection/pairing state, contact-sync count — for diagnosing before sending |
 
@@ -87,7 +87,6 @@ npm run login   # pairing flow from source
 
 ## Roadmap
 
-- `send_file` — attachments with captions
 - npm publish for true `npx whatsapp-mcp` one-liner install
 
 MIT © Omar Yousef

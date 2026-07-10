@@ -21,7 +21,7 @@ import {
   normalizePhoneJid,
   type CachedContact,
 } from "./contacts.js";
-import { mediaKindForPath, mimeTypeForPath } from "./media.js";
+import { mediaKindForPath, mimeTypeForPath, isLocalFilePath } from "./media.js";
 
 // Session + cache live OUTSIDE any repo checkout so credentials can never be
 // committed by accident. ~/.whatsapp-mcp/auth holds the paired session
@@ -242,6 +242,9 @@ export class WhatsAppClient {
    */
   async sendMedia(jid: string, filePath: string, caption?: string): Promise<void> {
     if (!this.sock || this.status !== "connected") throw new Error("not connected");
+    if (!isLocalFilePath(filePath)) {
+      throw new Error(`file_path must be an absolute local path, not a URL: ${filePath}`);
+    }
     const kind = mediaKindForPath(filePath);
     const media = { url: filePath };
     if (kind === "image") {

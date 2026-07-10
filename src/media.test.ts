@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mediaKindForPath, mimeTypeForPath } from "./media.js";
+import { mediaKindForPath, mimeTypeForPath, isLocalFilePath } from "./media.js";
 
 describe("mediaKindForPath", () => {
   it("detects common image extensions", () => {
@@ -65,5 +65,31 @@ describe("mimeTypeForPath", () => {
   it("falls back to application/octet-stream for unknown extensions", () => {
     expect(mimeTypeForPath("archive.xyz")).toBe("application/octet-stream");
     expect(mimeTypeForPath("README")).toBe("application/octet-stream");
+  });
+});
+
+describe("isLocalFilePath", () => {
+  it("accepts an absolute POSIX path", () => {
+    expect(isLocalFilePath("/Users/example/Desktop/photo.jpg")).toBe(true);
+  });
+
+  it("rejects a bare relative path", () => {
+    expect(isLocalFilePath("photo.jpg")).toBe(false);
+  });
+
+  it("rejects a relative path with directories", () => {
+    expect(isLocalFilePath("some/dir/photo.jpg")).toBe(false);
+  });
+
+  it("rejects an https URL", () => {
+    expect(isLocalFilePath("https://example.com/photo.jpg")).toBe(false);
+  });
+
+  it("rejects an http URL", () => {
+    expect(isLocalFilePath("http://example.com/photo.jpg")).toBe(false);
+  });
+
+  it("rejects any other URI scheme", () => {
+    expect(isLocalFilePath("ftp://example.com/photo.jpg")).toBe(false);
   });
 });
