@@ -8,6 +8,9 @@ auth/
 *.session
 .whatsapp-mcp/
 
+# local Claude Code project instructions (not for public repo)
+CLAUDE.md
+
 # misc
 .DS_Store
 *.log
