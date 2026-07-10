@@ -21,6 +21,7 @@ import {
   normalizePhoneJid,
   type CachedContact,
 } from "./contacts.js";
+import { mediaKindForPath, mimeTypeForPath } from "./media.js";
 
 // Session + cache live OUTSIDE any repo checkout so credentials can never be
 // committed by accident. ~/.whatsapp-mcp/auth holds the paired session
@@ -229,5 +230,31 @@ export class WhatsAppClient {
   async sendText(jid: string, text: string): Promise<void> {
     if (!this.sock || this.status !== "connected") throw new Error("not connected");
     await this.sock.sendMessage(jid, { text });
+  }
+
+  /**
+   * Send a local file as an image, video, or document, auto-detected from
+   * its extension (see media.ts). Baileys reads the file itself from
+   * `{ url: filePath }` — no manual buffering needed. Any failure (file not
+   * found, unsupported/corrupt file, network error, file too large) throws
+   * and is surfaced by the caller (server.ts) as a tool error — there is no
+   * pre-flight existence or size check here by design.
+   */
+  async sendMedia(jid: string, filePath: string, caption?: string): Promise<void> {
+    if (!this.sock || this.status !== "connected") throw new Error("not connected");
+    const kind = mediaKindForPath(filePath);
+    const media = { url: filePath };
+    if (kind === "image") {
+      await this.sock.sendMessage(jid, { image: media, caption });
+    } else if (kind === "video") {
+      await this.sock.sendMessage(jid, { video: media, caption });
+    } else {
+      await this.sock.sendMessage(jid, {
+        document: media,
+        mimetype: mimeTypeForPath(filePath),
+        fileName: path.basename(filePath),
+        caption,
+      });
+    }
   }
 }
