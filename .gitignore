@@ -1,0 +1,13 @@
+# build output
+dist/
+node_modules/
+
+# never commit WhatsApp session credentials, even by accident.
+# (the server stores them in ~/.whatsapp-mcp/ outside the repo, but belt-and-suspenders)
+auth/
+*.session
+.whatsapp-mcp/
+
+# misc
+.DS_Store
+*.log
