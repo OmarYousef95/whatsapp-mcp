@@ -19,6 +19,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import qrcode from "qrcode-terminal";
+import path from "node:path";
 import { WhatsAppClient } from "./whatsapp.js";
 import { resolveRecipient, searchContacts } from "./contacts.js";
 
@@ -74,26 +75,49 @@ export async function runServer(): Promise<void> {
     {
       title: "Send WhatsApp message",
       description:
-        "Send a WhatsApp text message from the user's personal account. " +
-        "`recipient` accepts: a contact name (must match EXACTLY one saved contact, " +
-        "case-insensitive — if zero or several match, the call fails and lists the " +
-        "candidates so you can ask the user which one they meant), a phone number in " +
-        "international format (e.g. +962791234567), or 'me' to message the user's own " +
-        "self-chat. The result confirms exactly who the message went to. " +
-        "Never retry a failed send blindly — read the error, it tells you what to fix. " +
-        "Sending is a real-world side effect: unless the user explicitly dictated both " +
-        "the recipient and the exact message, confirm with them before calling this.",
+        "Send a WhatsApp message from the user's personal account: plain text, a local " +
+        "file (image, video, or document), or a file with a caption. `recipient` accepts: " +
+        "a contact name (must match EXACTLY one saved contact, case-insensitive — if zero " +
+        "or several match, the call fails and lists the candidates so you can ask the user " +
+        "which one they meant), a phone number in international format (e.g. " +
+        "+962791234567), or 'me' to message the user's own self-chat. Provide `message`, " +
+        "`file_path`, or both — when both are given, `message` becomes the file's caption. " +
+        "Media type is auto-detected from the file's extension; unrecognized extensions are " +
+        "sent as a generic document. The result confirms exactly who/what was sent. Never " +
+        "retry a failed send blindly — read the error, it tells you what to fix. Sending is " +
+        "a real-world side effect: unless the user explicitly dictated both the recipient " +
+        "and the exact message/file, confirm with them before calling this.",
       inputSchema: {
         recipient: z
           .string()
           .describe("Contact name (exact match), international phone number, or 'me'"),
-        message: z.string().min(1).describe("The text message to send"),
+        message: z
+          .string()
+          .optional()
+          .describe(
+            "The text message to send. Required unless file_path is given; when both " +
+              "are given, this becomes the file's caption."
+          ),
+        file_path: z
+          .string()
+          .optional()
+          .describe(
+            "Absolute local path to an image, video, or other file to send. Media type " +
+              "is auto-detected from the extension; unrecognized extensions are sent as " +
+              "a generic document."
+          ),
       },
     },
-    async ({ recipient, message }) => {
+    async ({ recipient, message, file_path }) => {
+      if (!message && !file_path) {
+        return err("Provide a message, a file_path, or both.");
+      }
       if (client.status !== "connected") return notReadyError();
 
       const resolution = resolveRecipient(recipient, client.getContacts());
+
+      let jid: string;
+      let label: string;
 
       switch (resolution.kind) {
         case "invalid":
@@ -119,9 +143,9 @@ export async function runServer(): Promise<void> {
         }
 
         case "self": {
-          const jid = client.selfJid();
-          await client.sendText(jid, message);
-          return ok(`Sent to your own self-chat (${client.selfNumber()}): "${message}"`);
+          jid = client.selfJid();
+          label = `your own self-chat (${client.selfNumber()})`;
+          break;
         }
 
         case "number": {
@@ -130,17 +154,30 @@ export async function runServer(): Promise<void> {
               `+${resolution.jid.split("@")[0]} is not registered on WhatsApp — nothing sent.`
             );
           }
-          await client.sendText(resolution.jid, message);
-          return ok(`Sent to +${resolution.jid.split("@")[0]}: "${message}"`);
+          jid = resolution.jid;
+          label = `+${resolution.jid.split("@")[0]}`;
+          break;
         }
 
         case "resolved": {
-          await client.sendText(resolution.jid, message);
-          return ok(
-            `Sent to ${resolution.name} (+${resolution.jid.split("@")[0]}): "${message}"`
-          );
+          jid = resolution.jid;
+          label = `${resolution.name} (+${resolution.jid.split("@")[0]})`;
+          break;
         }
       }
+
+      if (file_path) {
+        try {
+          await client.sendMedia(jid, file_path, message);
+        } catch (e) {
+          return err(`Failed to send file: ${(e as Error).message}`);
+        }
+        const captionNote = message ? ` with caption: "${message}"` : "";
+        return ok(`Sent ${path.basename(file_path)} to ${label}${captionNote}`);
+      }
+
+      await client.sendText(jid, message!);
+      return ok(`Sent to ${label}: "${message}"`);
     }
   );
 
