@@ -67,6 +67,12 @@ export class WhatsAppClient {
     sock.ev.on("creds.update", saveCreds);
 
     sock.ev.on("connection.update", (update) => {
+      // A superseded socket can still fire late events after a newer one has
+      // taken over (Baileys doesn't tear down old listeners on reconnect).
+      // Acting on those causes duplicate reconnects, which WhatsApp then
+      // kills as a session conflict — an endless connect/disconnect flap.
+      if (this.sock !== sock) return;
+
       const { connection, qr, lastDisconnect } = update;
 
       if (qr) {
@@ -85,6 +91,7 @@ export class WhatsAppClient {
 
       if (connection === "close") {
         const code = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
+        console.error(`[whatsapp-mcp] connection closed (code ${code ?? "unknown"}), reconnecting`);
         if (code === DisconnectReason.loggedOut) {
           // Session was revoked from the phone — reconnecting would loop
           // forever on a dead session. User must pair again.
