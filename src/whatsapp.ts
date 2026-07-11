@@ -201,9 +201,12 @@ export class WhatsAppClient {
   }
 
   /**
-   * Persist one live message to its chat's cache file, trimmed to the last
-   * MAX_MESSAGES_PER_CHAT. Best-effort: a failure here must never affect the
-   * live connection, so every failure is caught and logged without content.
+   * Persist one live incoming message to its chat's cache file. Only
+   * `type: "notify"` upsert batches reach here (see the `messages.upsert`
+   * subscription in `connect()`) — messages sent via sendText/sendMedia are
+   * cached directly by those methods instead, because Baileys echoes our own
+   * sent messages via this same event with `type: "append"`, the same type
+   * used for history-sync batches, so this handler can't tell the two apart.
    */
   private async cacheMessage(msg: WAMessage): Promise<void> {
     const remoteJid = msg.key.remoteJid;
@@ -211,11 +214,19 @@ export class WhatsAppClient {
     const jid = remoteJid.endsWith("@lid") ? this.lidToPn.get(remoteJid) ?? remoteJid : remoteJid;
     const tsRaw = msg.messageTimestamp;
     const timestamp = (typeof tsRaw === "number" ? tsRaw : Number(tsRaw ?? 0)) * 1000;
-    const entry: CachedMessage = {
+    await this.appendCachedMessage(jid, {
       fromMe: msg.key.fromMe ?? false,
       timestamp,
       text: describeMessageContent(msg.message),
-    };
+    });
+  }
+
+  /**
+   * Append one message to a chat's cache file, trimmed to the last
+   * MAX_MESSAGES_PER_CHAT. Best-effort: a failure here must never affect the
+   * live connection, so every failure is caught and logged without content.
+   */
+  private async appendCachedMessage(jid: string, entry: CachedMessage): Promise<void> {
     try {
       const existing = await this.readChatFile(jid);
       await this.writeChatFile(jid, trimHistory([...existing, entry], MAX_MESSAGES_PER_CHAT));
@@ -291,6 +302,9 @@ export class WhatsAppClient {
   async sendText(jid: string, text: string): Promise<void> {
     if (!this.sock || this.status !== "connected") throw new Error("not connected");
     await this.sock.sendMessage(jid, { text });
+    if (isTrackableChat(jid)) {
+      void this.appendCachedMessage(jid, { fromMe: true, timestamp: Date.now(), text });
+    }
   }
 
   /**
@@ -319,6 +333,16 @@ export class WhatsAppClient {
         fileName: path.basename(filePath),
         caption,
       });
+    }
+    if (isTrackableChat(jid)) {
+      const text = describeMessageContent(
+        kind === "image"
+          ? { imageMessage: { caption } }
+          : kind === "video"
+            ? { videoMessage: { caption } }
+            : { documentMessage: { fileName: path.basename(filePath) } }
+      );
+      void this.appendCachedMessage(jid, { fromMe: true, timestamp: Date.now(), text });
     }
   }
 
