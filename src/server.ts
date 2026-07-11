@@ -206,7 +206,136 @@ export async function runServer(): Promise<void> {
     }
   );
 
-  // ── Tool 3: get_connection_status (read-only, no arguments) ──────────────
+  // ── Tool 3: read_messages (read-only) ─────────────────────────────────────
+  server.registerTool(
+    "read_messages",
+    {
+      title: "Read WhatsApp message history",
+      description:
+        "Read cached message history for a WhatsApp chat: plain text and placeholders for " +
+        'media (e.g. "[image: caption]", "[voice note]"). `recipient` accepts the same forms ' +
+        "as send_message: a contact name (exact match), a phone number, or 'me'. Only messages " +
+        "sent or received since this feature started running are available — there is no " +
+        "historical backfill. Group chats are not supported. Returns messages oldest-first " +
+        "with each line labeled 'You' or the contact's name.",
+      inputSchema: {
+        recipient: z
+          .string()
+          .describe("Contact name (exact match), international phone number, or 'me'"),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(100)
+          .optional()
+          .describe("Max messages to return, oldest-first (default 20, max 100)"),
+      },
+    },
+    async ({ recipient, limit }) => {
+      if (client.status !== "connected") return notReadyError();
+
+      const resolution = resolveRecipient(recipient, client.getContacts());
+
+      let jid: string;
+      let peerName: string;
+
+      switch (resolution.kind) {
+        case "invalid":
+          return err(`Invalid recipient: ${resolution.reason}`);
+
+        case "not_found": {
+          const hint =
+            resolution.candidates.length > 0
+              ? `Close matches: ${resolution.candidates.map((c) => c.name).join(", ")}. ` +
+                "Ask the user which one they meant, then call again with that exact name."
+              : "No similar contacts found. Try search_contacts, or use a phone number.";
+          return err(`No contact named exactly "${recipient}". ${hint}`);
+        }
+
+        case "ambiguous": {
+          const list = resolution.matches
+            .map((m) => `- ${m.name} (+${m.jid.split("@")[0]})`)
+            .join("\n");
+          return err(
+            `Several contacts match "${recipient}" — refusing to guess:\n${list}\n` +
+              "Ask the user which one, then call again with the phone number."
+          );
+        }
+
+        case "self": {
+          jid = client.selfJid();
+          peerName = "You";
+          break;
+        }
+
+        case "number": {
+          jid = resolution.jid;
+          peerName = `+${resolution.jid.split("@")[0]}`;
+          break;
+        }
+
+        case "resolved": {
+          jid = resolution.jid;
+          peerName = resolution.name;
+          break;
+        }
+      }
+
+      const messages = await client.getMessages(jid, limit ?? 20);
+      if (messages.length === 0) {
+        return ok(
+          `No cached messages with ${peerName} yet — only messages sent/received since this ` +
+            "feature was enabled are available."
+        );
+      }
+      const lines = messages.map((m) => {
+        const who = m.fromMe ? "You" : peerName;
+        const when = new Date(m.timestamp).toLocaleString();
+        return `[${when}] ${who}: ${m.text}`;
+      });
+      return ok(lines.join("\n"));
+    }
+  );
+
+  // ── Tool 4: list_recent_chats (read-only, no chat needed) ────────────────
+  server.registerTool(
+    "list_recent_chats",
+    {
+      title: "List recently active WhatsApp chats",
+      description:
+        "List 1:1 WhatsApp chats with cached message activity, newest first. Each entry shows " +
+        "the contact name (or phone number if unknown), when the last message arrived, and a " +
+        "short preview. Use this to find out what's been happening without already knowing who " +
+        "to ask about, then call read_messages on whichever chat matters. Only reflects " +
+        "activity since this feature started running.",
+      inputSchema: {
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(100)
+          .optional()
+          .describe("Max chats to return, newest-first (default 20, max 100)"),
+      },
+    },
+    async ({ limit }) => {
+      if (client.status !== "connected") return notReadyError();
+
+      const chats = await client.listRecentChats(limit ?? 20);
+      if (chats.length === 0) {
+        return ok("No cached message activity yet.");
+      }
+      const contactsByJid = new Map(client.getContacts().map((c) => [c.jid, c.name]));
+      const lines = chats.map((c) => {
+        const name = contactsByJid.get(c.jid) ?? `+${c.jid.split("@")[0]}`;
+        const when = new Date(c.lastAt).toLocaleString();
+        return `- ${name} — ${when} — ${c.preview}`;
+      });
+      return ok(lines.join("\n"));
+    }
+  );
+
+  // ── Tool 5: get_connection_status (read-only, no arguments) ──────────────
   // Lets the model check state proactively ("is WhatsApp even connected?")
   // instead of discovering problems by having a send fail.
   server.registerTool(
