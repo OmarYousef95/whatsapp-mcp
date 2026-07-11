@@ -174,9 +174,25 @@ export class WhatsAppClient {
     }
   }
 
-  /** Resolve the "@lid" keys already in the cache via Baileys' lid→pn store. */
+  /**
+   * Resolve "@lid" keys already in the cache via Baileys' lid→pn store —
+   * both contact entries and orphaned message-cache files. A message can
+   * arrive (and get cached) under a lid that never made it into a contact
+   * record at all (see learnMapping's docstring), so without this, that
+   * file would sit unmerged until WhatsApp happens to push the mapping on
+   * its own — this makes the very next reconnect resolve it deterministically.
+   */
   private async reconcileExistingLids(sock: WASocket): Promise<void> {
-    const lids = [...this.contacts.keys()].filter((k) => k.endsWith("@lid"));
+    const contactLids = [...this.contacts.keys()].filter((k) => k.endsWith("@lid"));
+    let orphanedLids: string[] = [];
+    try {
+      orphanedLids = (await readdir(MESSAGES_DIR))
+        .filter((f) => f.endsWith("@lid.json"))
+        .map((f) => f.slice(0, -".json".length));
+    } catch {
+      // MESSAGES_DIR always exists by the time connect() gets here; ignore regardless.
+    }
+    const lids = [...new Set([...contactLids, ...orphanedLids])];
     if (lids.length === 0) return;
     try {
       const pairs = await sock.signalRepository.lidMapping.getPNsForLIDs(lids);
