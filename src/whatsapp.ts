@@ -208,8 +208,6 @@ export class WhatsAppClient {
       lid?: string;
       phoneNumber?: string;
       name?: string;
-      notify?: string;
-      verifiedName?: string;
     }>
   ): Promise<void> {
     let changed = false;
@@ -221,7 +219,12 @@ export class WhatsAppClient {
       if (mapping && (await this.learnMapping(mapping.lid, mapping.pn))) {
         learnedMapping = true;
       }
-      const name = c.name ?? c.verifiedName ?? c.notify;
+      // `c.name` is the name YOU saved for this person on WhatsApp — never
+      // `notify`/`verifiedName`, which are names the *other* person set for
+      // themselves and could collide with an unrelated saved contact's name
+      // (e.g. a stranger's self-set "Khaled" silently matching send_message's
+      // exact-name lookup meant for a saved contact like "B.Khaled").
+      const name = c.name;
       if (!name) continue;
       // Store under the canonical phone JID, never a raw LID, so one person
       // yields one cache entry (see the LID note in contacts.ts).
