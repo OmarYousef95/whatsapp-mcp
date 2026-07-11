@@ -213,7 +213,9 @@ export class WhatsAppClient {
     let changed = false;
     let learnedMapping = false;
     for (const c of batch) {
-      if (!c.id) continue;
+      // Groups/broadcasts are never real 1:1 contacts to message by name —
+      // this whole tool is scoped to 1:1 chats (see isTrackableChat).
+      if (!c.id || !isTrackableChat(c.id)) continue;
       // A record carrying both a lid and a phone number teaches us the link.
       const mapping = lidMappingFrom({ id: c.id, lid: c.lid, phoneNumber: c.phoneNumber });
       if (mapping && (await this.learnMapping(mapping.lid, mapping.pn))) {
