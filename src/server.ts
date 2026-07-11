@@ -80,13 +80,17 @@ export async function runServer(): Promise<void> {
         "a contact name (must match EXACTLY one saved contact, case-insensitive — if zero " +
         "or several match, the call fails and lists the candidates so you can ask the user " +
         "which one they meant), a phone number in international format (e.g. " +
-        "+962791234567), or 'me' to message the user's own self-chat. Provide `message`, " +
-        "`file_path`, or both — when both are given, `message` becomes the file's caption. " +
-        "Media type is auto-detected from the file's extension; unrecognized extensions are " +
-        "sent as a generic document. The result confirms exactly who/what was sent. Never " +
-        "retry a failed send blindly — read the error, it tells you what to fix. Sending is " +
-        "a real-world side effect: unless the user explicitly dictated both the recipient " +
-        "and the exact message/file, confirm with them before calling this.",
+        "+962791234567), or 'me' to message the user's own self-chat. A phone number that " +
+        "isn't a saved contact is refused on the first call — the error asks you to confirm " +
+        "with the user, then call again with `confirmed: true`; this exists because a saved " +
+        "contact's name can collide with an unrelated WhatsApp account (e.g. someone's " +
+        "self-set display name), so a bare number deserves the same caution. Provide " +
+        "`message`, `file_path`, or both — when both are given, `message` becomes the file's " +
+        "caption. Media type is auto-detected from the file's extension; unrecognized " +
+        "extensions are sent as a generic document. The result confirms exactly who/what was " +
+        "sent. Never retry a failed send blindly — read the error, it tells you what to fix. " +
+        "Sending is a real-world side effect: unless the user explicitly dictated both the " +
+        "recipient and the exact message/file, confirm with them before calling this.",
       inputSchema: {
         recipient: z
           .string()
@@ -106,9 +110,17 @@ export async function runServer(): Promise<void> {
               "is auto-detected from the extension; unrecognized extensions are sent as " +
               "a generic document."
           ),
+        confirmed: z
+          .boolean()
+          .optional()
+          .describe(
+            "Required (set to true) to send to a phone number that is not a saved contact. " +
+              "Omit on the first attempt; only set this after the user has explicitly " +
+              "confirmed that number is correct."
+          ),
       },
     },
-    async ({ recipient, message, file_path }) => {
+    async ({ recipient, message, file_path, confirmed }) => {
       if (!message && !file_path) {
         return err("Provide a message, a file_path, or both.");
       }
@@ -152,6 +164,12 @@ export async function runServer(): Promise<void> {
           if (!(await client.numberExists(resolution.jid))) {
             return err(
               `+${resolution.jid.split("@")[0]} is not registered on WhatsApp — nothing sent.`
+            );
+          }
+          if (!confirmed) {
+            return err(
+              `+${resolution.jid.split("@")[0]} is not a saved contact. Confirm with the user ` +
+                "that this is the number they mean, then call again with confirmed: true."
             );
           }
           jid = resolution.jid;
