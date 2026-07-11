@@ -7,11 +7,12 @@ import makeWASocket, {
   DisconnectReason,
   jidNormalizedUser,
   type WASocket,
+  type WAMessage,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import {
@@ -22,6 +23,7 @@ import {
   type CachedContact,
 } from "./contacts.js";
 import { mediaKindForPath, mimeTypeForPath, isLocalFilePath } from "./media.js";
+import { describeMessageContent, trimHistory, isTrackableChat, type CachedMessage } from "./messages.js";
 
 // Session + cache live OUTSIDE any repo checkout so credentials can never be
 // committed by accident. ~/.whatsapp-mcp/auth holds the paired session
@@ -29,6 +31,8 @@ import { mediaKindForPath, mimeTypeForPath, isLocalFilePath } from "./media.js";
 const DATA_DIR = path.join(homedir(), ".whatsapp-mcp");
 const AUTH_DIR = path.join(DATA_DIR, "auth");
 const CONTACTS_FILE = path.join(DATA_DIR, "contacts.json");
+const MESSAGES_DIR = path.join(DATA_DIR, "messages");
+const MAX_MESSAGES_PER_CHAT = 100;
 
 // CRITICAL for MCP stdio servers: stdout carries the JSON-RPC protocol, so
 // every log line must go to stderr (fd 2) or the client sees corrupt frames.
@@ -57,6 +61,7 @@ export class WhatsAppClient {
 
   async connect(): Promise<void> {
     await mkdir(AUTH_DIR, { recursive: true });
+    await mkdir(MESSAGES_DIR, { recursive: true });
     await this.loadContactCache();
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -115,6 +120,13 @@ export class WhatsAppClient {
     });
     // WhatsApp can push lid↔pn links independently of contact records.
     sock.ev.on("lid-mapping.update", (m) => void this.learnLidMappings([m]));
+
+    // Only live messages are cached — "append" batches are history sync,
+    // and caching those would silently violate the no-backfill design.
+    sock.ev.on("messages.upsert", ({ messages, type }) => {
+      if (type !== "notify") return;
+      for (const msg of messages) void this.cacheMessage(msg);
+    });
   }
 
   /**
@@ -186,6 +198,48 @@ export class WhatsAppClient {
       if (this.contacts.size !== before) changed = true;
     }
     if (changed) await this.saveContactCache();
+  }
+
+  /**
+   * Persist one live message to its chat's cache file, trimmed to the last
+   * MAX_MESSAGES_PER_CHAT. Best-effort: a failure here must never affect the
+   * live connection, so every failure is caught and logged without content.
+   */
+  private async cacheMessage(msg: WAMessage): Promise<void> {
+    const remoteJid = msg.key.remoteJid;
+    if (!remoteJid || !isTrackableChat(remoteJid)) return;
+    const jid = remoteJid.endsWith("@lid") ? this.lidToPn.get(remoteJid) ?? remoteJid : remoteJid;
+    const tsRaw = msg.messageTimestamp;
+    const timestamp = (typeof tsRaw === "number" ? tsRaw : Number(tsRaw ?? 0)) * 1000;
+    const entry: CachedMessage = {
+      fromMe: msg.key.fromMe ?? false,
+      timestamp,
+      text: describeMessageContent(msg.message),
+    };
+    try {
+      const existing = await this.readChatFile(jid);
+      await this.writeChatFile(jid, trimHistory([...existing, entry], MAX_MESSAGES_PER_CHAT));
+    } catch {
+      console.error("[whatsapp-mcp] failed to persist a cached message");
+    }
+  }
+
+  private chatFilePath(jid: string): string {
+    return path.join(MESSAGES_DIR, `${jid}.json`);
+  }
+
+  private async readChatFile(jid: string): Promise<CachedMessage[]> {
+    try {
+      const raw = JSON.parse(await readFile(this.chatFilePath(jid), "utf8"));
+      return Array.isArray(raw) ? raw : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async writeChatFile(jid: string, messages: CachedMessage[]): Promise<void> {
+    await mkdir(MESSAGES_DIR, { recursive: true });
+    await writeFile(this.chatFilePath(jid), JSON.stringify(messages, null, 2));
   }
 
   private async loadContactCache(): Promise<void> {
@@ -266,5 +320,36 @@ export class WhatsAppClient {
         caption,
       });
     }
+  }
+
+  /** The most recent `limit` cached messages for one chat, oldest-first. */
+  async getMessages(jid: string, limit: number): Promise<CachedMessage[]> {
+    const all = await this.readChatFile(jid);
+    return all.slice(Math.max(0, all.length - limit));
+  }
+
+  /**
+   * Chats with cached activity, newest-first, each with its last message's
+   * time and text as a preview. Derived directly from the per-chat files —
+   * there is no separate index to keep in sync (see design doc).
+   */
+  async listRecentChats(limit: number): Promise<Array<{ jid: string; lastAt: number; preview: string }>> {
+    let files: string[];
+    try {
+      files = await readdir(MESSAGES_DIR);
+    } catch {
+      return [];
+    }
+    const entries: Array<{ jid: string; lastAt: number; preview: string }> = [];
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+      const jid = file.slice(0, -".json".length);
+      const messages = await this.readChatFile(jid);
+      const last = messages[messages.length - 1];
+      if (!last) continue;
+      entries.push({ jid, lastAt: last.timestamp, preview: last.text });
+    }
+    entries.sort((a, b) => b.lastAt - a.lastAt);
+    return entries.slice(0, limit);
   }
 }
