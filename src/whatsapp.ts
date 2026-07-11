@@ -12,7 +12,7 @@ import makeWASocket, {
 import { Boom } from "@hapi/boom";
 import pino from "pino";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import {
@@ -137,16 +137,41 @@ export class WhatsAppClient {
     let learned = false;
     for (const { lid, pn } of pairs) {
       if (!lid || !pn) continue;
-      const pnJid = normalizePhoneJid(pn);
-      if (this.lidToPn.get(lid) !== pnJid) {
-        this.lidToPn.set(lid, pnJid);
-        learned = true;
-      }
+      if (await this.learnMapping(lid, normalizePhoneJid(pn))) learned = true;
     }
     if (!learned) return;
     const before = this.contacts.size;
     this.contacts = reconcileLidEntries(this.contacts, this.lidToPn);
     if (this.contacts.size !== before) await this.saveContactCache();
+  }
+
+  /**
+   * Record one lid→pn mapping and, if it's new, migrate any message cache
+   * file already filed under the raw lid onto the phone JID's file. A live
+   * message can arrive (and get cached) before WhatsApp pushes the mapping
+   * that resolves its sender's lid — sometimes by several seconds — so
+   * without this, that message would be permanently orphaned under a lid
+   * that no contact record points to anymore once reconcileLidEntries runs.
+   */
+  private async learnMapping(lid: string, pnJid: string): Promise<boolean> {
+    if (this.lidToPn.get(lid) === pnJid) return false;
+    this.lidToPn.set(lid, pnJid);
+    await this.migrateMessageCache(lid, pnJid);
+    return true;
+  }
+
+  /** Merge a lid-keyed chat file into its phone JID's file, oldest-first, then drop the lid file. */
+  private async migrateMessageCache(lidJid: string, pnJid: string): Promise<void> {
+    try {
+      const orphaned = await this.readChatFile(lidJid);
+      if (orphaned.length === 0) return;
+      const existing = await this.readChatFile(pnJid);
+      const merged = [...existing, ...orphaned].sort((a, b) => a.timestamp - b.timestamp);
+      await this.writeChatFile(pnJid, trimHistory(merged, MAX_MESSAGES_PER_CHAT));
+      await unlink(this.chatFilePath(lidJid));
+    } catch {
+      console.error("[whatsapp-mcp] failed to migrate a lid-keyed message cache file");
+    }
   }
 
   /** Resolve the "@lid" keys already in the cache via Baileys' lid→pn store. */
@@ -177,8 +202,7 @@ export class WhatsAppClient {
       if (!c.id) continue;
       // A record carrying both a lid and a phone number teaches us the link.
       const mapping = lidMappingFrom({ id: c.id, lid: c.lid, phoneNumber: c.phoneNumber });
-      if (mapping && this.lidToPn.get(mapping.lid) !== mapping.pn) {
-        this.lidToPn.set(mapping.lid, mapping.pn);
+      if (mapping && (await this.learnMapping(mapping.lid, mapping.pn))) {
         learnedMapping = true;
       }
       const name = c.name ?? c.verifiedName ?? c.notify;
