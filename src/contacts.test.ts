@@ -19,6 +19,8 @@ const contacts: CachedContact[] = [
   { jid: "555000000005@s.whatsapp.net", name: "Sam" },
   { jid: "555000000006@s.whatsapp.net", name: "sam" },
   { jid: "555000000007@s.whatsapp.net", name: "5 Alpha" },
+  { jid: "555000000010@s.whatsapp.net", name: "Gray" },
+  { jid: "555000000011@s.whatsapp.net", name: "B.Gray" },
 ];
 
 describe("resolveRecipient — names", () => {
@@ -60,6 +62,17 @@ describe("resolveRecipient — names", () => {
   it("treats names containing digits as names, not numbers", () => {
     const r = resolveRecipient("5 Alpha", contacts);
     expect(r).toMatchObject({ kind: "resolved", name: "5 Alpha" });
+  });
+
+  it("REFUSES a lone exact match when another contact's name contains it, instead of guessing", () => {
+    // Regression test for a real wrong-recipient send: typing "Khaled" found
+    // an unrelated contact named exactly "Khaled" and sent to them, even
+    // though "B.Khaled" (the intended contact) also contains that text.
+    const r = resolveRecipient("Gray", contacts);
+    expect(r.kind).toBe("ambiguous");
+    if (r.kind === "ambiguous") {
+      expect(r.matches.map((c) => c.name).sort()).toEqual(["B.Gray", "Gray"]);
+    }
   });
 });
 

@@ -47,13 +47,21 @@ export function resolveRecipient(input: string, contacts: CachedContact[]): Reso
   }
 
   const needle = trimmed.toLowerCase();
-  const matches = contacts.filter((c) => c.name.trim().toLowerCase() === needle);
+  const exactMatches = contacts.filter((c) => c.name.trim().toLowerCase() === needle);
 
-  if (matches.length === 1) {
-    return { kind: "resolved", jid: matches[0].jid, name: matches[0].name };
+  if (exactMatches.length > 1) {
+    return { kind: "ambiguous", matches: exactMatches };
   }
-  if (matches.length > 1) {
-    return { kind: "ambiguous", matches };
+  if (exactMatches.length === 1) {
+    // A single exact match can still be the wrong pick if another saved
+    // contact's name contains the same text (e.g. "Khaled" exactly matches
+    // one contact, but "B.Khaled" — the one actually meant — also contains
+    // "khaled"). Refuse to guess between them; surface every candidate.
+    const looseMatches = contacts.filter((c) => c.name.trim().toLowerCase().includes(needle));
+    if (looseMatches.length > 1) {
+      return { kind: "ambiguous", matches: looseMatches };
+    }
+    return { kind: "resolved", jid: exactMatches[0].jid, name: exactMatches[0].name };
   }
   return { kind: "not_found", candidates: searchContacts(trimmed, contacts, 5) };
 }
